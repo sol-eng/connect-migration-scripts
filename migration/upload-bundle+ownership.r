@@ -3,11 +3,13 @@ library(furrr)
 
 connect_new <- connect(
   server = "http://localhost:3940",
-  api_key = "JZyebHQTdUiItSjKpRoDfJd5WpNGgys7"
+  api_key = "DO8QaoKqDHkK6IhXir8tJnhECjAXj4QQ"
 )
 
 admin_user <- "adminuser"
 data_dir <- "/tmp/data"
+
+create_missing_users_and_groups <- TRUE
 
 # Load permissions data for validation
 content_perms <- read.csv(file.path(data_dir, "relevant_content_perms.csv"))
@@ -27,22 +29,151 @@ required_principals <- content_perms |>
 
 missing_principals <- c()
 
+# Load source server user/group data for creating missing principals
+source_users <- tryCatch(
+  read.csv(file.path(data_dir, "users.csv")),
+  error = function(e) NULL
+)
+source_groups <- tryCatch(
+  read.csv(file.path(data_dir, "groups.csv")),
+  error = function(e) NULL
+)
+source_group_members <- tryCatch(
+  read.csv(file.path(data_dir, "group_members.csv")),
+  error = function(e) NULL
+)
+
 for (i in seq_len(nrow(required_principals))) {
   principal <- required_principals[i, ]
 
   if (principal$principal_type == "user") {
     if (!any(target_users$username == principal$principal_name)) {
-      missing_principals <- c(
-        missing_principals,
-        paste0("USER: ", principal$principal_name)
-      )
+      if (create_missing_users_and_groups && !is.null(source_users)) {
+        user_info <- source_users |>
+          dplyr::filter(username == principal$principal_name)
+        if (nrow(user_info) > 0) {
+          cat("  Creating missing user:", principal$principal_name, "\n")
+          tryCatch(
+            {
+              connect_new$POST(
+                "v1/users",
+                body = list(
+                  username = user_info$username[1],
+                  first_name = user_info$first_name[1],
+                  last_name = user_info$last_name[1],
+                  email = user_info$email[1],
+                  password = "changeme!"
+                )
+              )
+              cat("  ✓ Created user:", principal$principal_name, "\n")
+            },
+            error = function(e) {
+              cat(
+                "  ✗ Failed to create user:",
+                principal$principal_name,
+                "-",
+                e$message,
+                "\n"
+              )
+              missing_principals <<- c(
+                missing_principals,
+                paste0("USER: ", principal$principal_name)
+              )
+            }
+          )
+        } else {
+          cat("  ✗ No source data for user:", principal$principal_name, "\n")
+          missing_principals <- c(
+            missing_principals,
+            paste0("USER: ", principal$principal_name)
+          )
+        }
+      } else {
+        missing_principals <- c(
+          missing_principals,
+          paste0("USER: ", principal$principal_name)
+        )
+      }
     }
   } else if (principal$principal_type == "group") {
     if (!any(target_groups$name == principal$principal_name)) {
-      missing_principals <- c(
-        missing_principals,
-        paste0("GROUP: ", principal$principal_name)
-      )
+      if (create_missing_users_and_groups && !is.null(source_groups)) {
+        cat("  Creating missing group:", principal$principal_name, "\n")
+        tryCatch(
+          {
+            connect_new$POST(
+              "v1/groups",
+              body = list(
+                name = principal$principal_name
+              )
+            )
+            cat("  ✓ Created group:", principal$principal_name, "\n")
+
+            # Add members to the group if we have membership data
+            if (!is.null(source_group_members)) {
+              members <- source_group_members |>
+                dplyr::filter(group_name == principal$principal_name)
+              if (nrow(members) > 0) {
+                # Refresh target users list to include newly created users
+                target_users_refreshed <- get_users(connect_new)
+                new_group <- get_groups(
+                  connect_new,
+                  prefix = principal$principal_name
+                )
+                for (m in seq_len(nrow(members))) {
+                  member_guid <- target_users_refreshed |>
+                    dplyr::filter(username == members$username[m]) |>
+                    dplyr::pull(guid)
+                  if (length(member_guid) > 0) {
+                    tryCatch(
+                      {
+                        connect_new$POST(
+                          paste0("v1/groups/", new_group$guid[1], "/members"),
+                          body = list(user_guid = member_guid[1])
+                        )
+                        cat("    ✓ Added", members$username[m], "to group\n")
+                      },
+                      error = function(e) {
+                        cat(
+                          "    ✗ Failed to add",
+                          members$username[m],
+                          "to group:",
+                          e$message,
+                          "\n"
+                        )
+                      }
+                    )
+                  } else {
+                    cat(
+                      "    ✗ User",
+                      members$username[m],
+                      "not found on target server\n"
+                    )
+                  }
+                }
+              }
+            }
+          },
+          error = function(e) {
+            cat(
+              "  ✗ Failed to create group:",
+              principal$principal_name,
+              "-",
+              e$message,
+              "\n"
+            )
+            missing_principals <<- c(
+              missing_principals,
+              paste0("GROUP: ", principal$principal_name)
+            )
+          }
+        )
+      } else {
+        missing_principals <- c(
+          missing_principals,
+          paste0("GROUP: ", principal$principal_name)
+        )
+      }
     }
   }
 }
@@ -58,6 +189,19 @@ if (length(missing_principals) > 0) {
 
 cat("✓ All required users and groups exist on target server\n\n")
 
+# Create "migrated" tag on target server
+cat("Creating 'migrated' tag on target server...\n")
+migrated_tag <- tryCatch(
+  {
+    create_tag(connect_new, "migrated")
+  },
+  error = function(e) {
+    # Tag may already exist, try to find it
+    tags <- get_tags(connect_new)
+    tags$migrated
+  }
+)
+cat("✓ 'migrated' tag ready\n\n")
 
 bundle_files <- list.files(
   path = data_dir,
@@ -94,16 +238,12 @@ if (file.exists(env_vars_file)) {
 } else {
   content_env_vars <- tibble::tibble(
     content_guid = character(),
-    env_var_name = character()
+    name = character(),
+    env_var_name = character(),
+    env_var_value = character()
   )
   cat("No environment variables file found, skipping env vars\n")
 }
-
-# Define environment variable values here
-# The Connect API only stores names, so you must provide values manually
-# All environment variables will be set to "changeme" on the target server
-# Update them with the correct values after migration
-env_var_default_value <- "changeme"
 
 # Group bundle files by GUID
 bundle_df <- tibble::tibble(file = bundle_files) |>
@@ -122,7 +262,7 @@ deploy_guid <- function(
   connect_new,
   admin_user,
   content_env_vars,
-  env_var_default_value
+  migrated_tag
 ) {
   has_multiple <- nrow(guid_bundles) > 1
 
@@ -319,7 +459,8 @@ deploy_guid <- function(
     env_args <- list()
     for (j in seq_len(nrow(guid_env_vars))) {
       var_name <- guid_env_vars$env_var_name[j]
-      env_args[[var_name]] <- env_var_default_value
+      var_value <- guid_env_vars$env_var_value[j]
+      env_args[[var_name]] <- var_value
     }
     if (length(env_args) > 0) {
       tryCatch(
@@ -337,6 +478,17 @@ deploy_guid <- function(
       )
     }
   }
+
+  # Tag content as "migrated"
+  tryCatch(
+    {
+      set_content_tags(new_content, migrated_tag)
+      cat("  Tagged content as 'migrated'\n")
+    },
+    error = function(e) {
+      cat("  Error tagging content:", e$message, "\n")
+    }
+  )
 
   cat("\n")
   invisible(new_bundle_id)
@@ -364,7 +516,7 @@ if (!any(relevant_content$guid == first_guid)) {
     connect_new,
     admin_user,
     content_env_vars,
-    env_var_default_value
+    migrated_tag
   )
 }
 
@@ -408,7 +560,7 @@ if (length(remaining_guids) > 0) {
         worker_connect,
         admin_user,
         content_env_vars,
-        env_var_default_value
+        migrated_tag
       )
     },
     .progress = TRUE,

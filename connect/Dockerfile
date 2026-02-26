@@ -2,7 +2,9 @@ FROM rockylinux:9
 
 RUN yum install -y epel-release procps initscripts sudo && crb enable
 
-RUN yum install -y https://cdn.posit.co/connect/2024.11/rstudio-connect-2024.11.0.el9.x86_64.rpm
+ARG PSC_VERSION="2024.11.0"
+
+RUN yum install -y https://cdn.posit.co/connect/${PSC_VERSION%.*}/rstudio-connect-${PSC_VERSION}.el9.x86_64.rpm
 
 ENV R_VERSION=4.3.3
 

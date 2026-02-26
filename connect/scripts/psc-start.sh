@@ -4,6 +4,13 @@ set -x
 
 head -c 32 /dev/random | base64 > /tmp/secret.key
 
+if [[ `hostname` == "connect" ]]; then 
+    sed -i 's#^; Address.*#Address="http://localhost:3939"#' /etc/rstudio-connect/rstudio-connect.gcfg
+else
+    sed -i 's#^; Address.*#Address="http://localhost:3940"#' /etc/rstudio-connect/rstudio-connect.gcfg
+fi
+
+
 /opt/rstudio-connect/bin/connect --config /etc/rstudio-connect/rstudio-connect.gcfg &
 
 /opt/rstudio-connect/bin/license-manager activate "$RSC_LICENSE"
@@ -84,73 +91,74 @@ if [ ! -f /var/lib/rstudio-connect/connect-bootstrap.key ]; then
 
     done
 
-    # Create groups
-    GROUP1_DATA='{"name": "group1", "description": "Group 1"}'
-    curl --silent --show-error -L --max-redirs 0 --fail \
-        -X POST \
-        -H "Authorization: Key ${API_KEY}" \
-        --data-raw "${GROUP1_DATA}" \
-        "${CONNECT_URL}/__api__/v1/groups" > /tmp/group1.log
-
-    GROUP2_DATA='{"name": "group2", "description": "Group 2"}'
-    curl --silent --show-error -L --max-redirs 0 --fail \
-        -X POST \
-        -H "Authorization: Key ${API_KEY}" \
-        --data-raw "${GROUP2_DATA}" \
-        "${CONNECT_URL}/__api__/v1/groups" > /tmp/group2.log
-
-    # Add adminuser to group1
-    GROUP1_GUID=$(curl --silent --show-error -L --max-redirs 0 --fail \
-        -H "Authorization: Key ${API_KEY}" \
-        "${CONNECT_URL}/__api__/v1/groups?prefix=group1" | \
-        python3 -c "import sys, json; data=json.load(sys.stdin); print(data['results'][0]['guid'] if data['results'] else '')")
-    
-    ADMINUSER_GUID=$(curl --silent --show-error -L --max-redirs 0 --fail \
-        -H "Authorization: Key ${API_KEY}" \
-        "${CONNECT_URL}/__api__/v1/users?prefix=adminuser" | \
-        python3 -c "import sys, json; data=json.load(sys.stdin); print(data['results'][0]['guid'] if data['results'] else '')")
-    
-    if [[ -n "$GROUP1_GUID" && -n "$ADMINUSER_GUID" ]]; then
-        echo "Adding adminuser ($ADMINUSER_GUID) to group1 ($GROUP1_GUID)"
+    if [[ `hostname` == "connect" ]]; then 
+        # Create groups
+        GROUP1_DATA='{"name": "group1", "description": "Group 1"}'
         curl --silent --show-error -L --max-redirs 0 --fail \
             -X POST \
             -H "Authorization: Key ${API_KEY}" \
-            -H "Content-Type: application/json" \
-            --data-raw "{\"user_guid\": \"${ADMINUSER_GUID}\"}" \
-            "${CONNECT_URL}/__api__/v1/groups/${GROUP1_GUID}/members" > /tmp/add_adminuser_to_group1.log
-        echo "Added adminuser to group1"
-    else
-        echo "Error: Could not find group1 or adminuser GUIDs"
-        echo "GROUP1_GUID: $GROUP1_GUID"
-        echo "ADMINUSER_GUID: $ADMINUSER_GUID"
-    fi
+            --data-raw "${GROUP1_DATA}" \
+            "${CONNECT_URL}/__api__/v1/groups" > /tmp/group1.log
 
-    # Add user3 to group2
-    GROUP2_GUID=$(curl --silent --show-error -L --max-redirs 0 --fail \
-        -H "Authorization: Key ${API_KEY}" \
-        "${CONNECT_URL}/__api__/v1/groups?prefix=group2" | \
-        python3 -c "import sys, json; data=json.load(sys.stdin); print(data['results'][0]['guid'] if data['results'] else '')")
-    
-    USER3_GUID=$(curl --silent --show-error -L --max-redirs 0 --fail \
-        -H "Authorization: Key ${API_KEY}" \
-        "${CONNECT_URL}/__api__/v1/users?prefix=user3" | \
-        python3 -c "import sys, json; data=json.load(sys.stdin); print(data['results'][0]['guid'] if data['results'] else '')")
-    
-    if [[ -n "$GROUP2_GUID" && -n "$USER3_GUID" ]]; then
-        echo "Adding user3 ($USER3_GUID) to group2 ($GROUP2_GUID)"
+        GROUP2_DATA='{"name": "group2", "description": "Group 2"}'
         curl --silent --show-error -L --max-redirs 0 --fail \
             -X POST \
             -H "Authorization: Key ${API_KEY}" \
-            -H "Content-Type: application/json" \
-            --data-raw "{\"user_guid\": \"${USER3_GUID}\"}" \
-            "${CONNECT_URL}/__api__/v1/groups/${GROUP2_GUID}/members" > /tmp/add_user3_to_group2.log
-        echo "Added user3 to group2"
-    else
-        echo "Error: Could not find group2 or user3 GUIDs"
-        echo "GROUP2_GUID: $GROUP2_GUID" 
-        echo "USER3_GUID: $USER3_GUID"
-    fi
+            --data-raw "${GROUP2_DATA}" \
+            "${CONNECT_URL}/__api__/v1/groups" > /tmp/group2.log
 
+        # Add adminuser to group1
+        GROUP1_GUID=$(curl --silent --show-error -L --max-redirs 0 --fail \
+            -H "Authorization: Key ${API_KEY}" \
+            "${CONNECT_URL}/__api__/v1/groups?prefix=group1" | \
+            python3 -c "import sys, json; data=json.load(sys.stdin); print(data['results'][0]['guid'] if data['results'] else '')")
+        
+        ADMINUSER_GUID=$(curl --silent --show-error -L --max-redirs 0 --fail \
+            -H "Authorization: Key ${API_KEY}" \
+            "${CONNECT_URL}/__api__/v1/users?prefix=adminuser" | \
+            python3 -c "import sys, json; data=json.load(sys.stdin); print(data['results'][0]['guid'] if data['results'] else '')")
+        
+        if [[ -n "$GROUP1_GUID" && -n "$ADMINUSER_GUID" ]]; then
+            echo "Adding adminuser ($ADMINUSER_GUID) to group1 ($GROUP1_GUID)"
+            curl --silent --show-error -L --max-redirs 0 --fail \
+                -X POST \
+                -H "Authorization: Key ${API_KEY}" \
+                -H "Content-Type: application/json" \
+                --data-raw "{\"user_guid\": \"${ADMINUSER_GUID}\"}" \
+                "${CONNECT_URL}/__api__/v1/groups/${GROUP1_GUID}/members" > /tmp/add_adminuser_to_group1.log
+            echo "Added adminuser to group1"
+        else
+            echo "Error: Could not find group1 or adminuser GUIDs"
+            echo "GROUP1_GUID: $GROUP1_GUID"
+            echo "ADMINUSER_GUID: $ADMINUSER_GUID"
+        fi
+
+        # Add user3 to group2
+        GROUP2_GUID=$(curl --silent --show-error -L --max-redirs 0 --fail \
+            -H "Authorization: Key ${API_KEY}" \
+            "${CONNECT_URL}/__api__/v1/groups?prefix=group2" | \
+            python3 -c "import sys, json; data=json.load(sys.stdin); print(data['results'][0]['guid'] if data['results'] else '')")
+        
+        USER3_GUID=$(curl --silent --show-error -L --max-redirs 0 --fail \
+            -H "Authorization: Key ${API_KEY}" \
+            "${CONNECT_URL}/__api__/v1/users?prefix=user3" | \
+            python3 -c "import sys, json; data=json.load(sys.stdin); print(data['results'][0]['guid'] if data['results'] else '')")
+        
+        if [[ -n "$GROUP2_GUID" && -n "$USER3_GUID" ]]; then
+            echo "Adding user3 ($USER3_GUID) to group2 ($GROUP2_GUID)"
+            curl --silent --show-error -L --max-redirs 0 --fail \
+                -X POST \
+                -H "Authorization: Key ${API_KEY}" \
+                -H "Content-Type: application/json" \
+                --data-raw "{\"user_guid\": \"${USER3_GUID}\"}" \
+                "${CONNECT_URL}/__api__/v1/groups/${GROUP2_GUID}/members" > /tmp/add_user3_to_group2.log
+            echo "Added user3 to group2"
+        else
+            echo "Error: Could not find group2 or user3 GUIDs"
+            echo "GROUP2_GUID: $GROUP2_GUID" 
+            echo "USER3_GUID: $USER3_GUID"
+        fi
+    fi
 
     if [[ `hostname` == "connect" ]]; then 
     # Set up adminuser with deployment capabilities

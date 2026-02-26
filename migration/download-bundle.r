@@ -5,7 +5,7 @@ library(furrr)
 # Replace with your server URL and API key
 connect <- connect(
   server = "http://localhost:3939",
-  api_key = "m9bkMPuVwCVebFke2fZ0B4jYB8kR3tMw"
+  api_key = "XwY4YKDHPu6mPQx5G1yNXAincDV3zC7c"
 )
 
 admin_user <- "adminuser"
@@ -19,7 +19,7 @@ is_hide_version <- TRUE
 # If is_fda_testing is set to
 #   TRUE: only download the bundles of the m5-perf and the penguins app
 #   FALSE: download everything
-is_fda_testing <- TRUE
+is_fda_testing <- FALSE
 
 # Only download max_bundles_per_guid
 max_bundles_per_guid <- 10
@@ -33,6 +33,14 @@ my_guid <- get_users(connect, prefix = admin_user)$guid
 my_content <- get_content(connect)
 my_content_guids <- my_content$guid
 
+if (is_fda_testing) {
+  my_content_guids <- c(
+    "ceb8c9c6-0bbf-4c3b-b968-9baa1b9c023a",
+    "dbf14418-b901-4d9f-b396-5bc82ec21075"
+  )
+}
+
+#my_content_guids <- c("d8d857fc-b323-402e-82eb-7f9a7b7c5165")
 
 # my_selected_content <- my_content[, c("guid", "name", "title", "vanity_url")]
 my_selected_content <- my_content[, c("guid", "name", "title")]
@@ -76,30 +84,38 @@ group_lookup <- get_groups(connect) |>
   dplyr::select(guid, name) |>
   dplyr::rename(groupname = name)
 
-# get all current permissions of the content pieces
-all_perms <- purrr::map(my_content_guids, \(content_guid) {
-  item <- content_item(connect, content_guid)
-  perms <- get_content_permissions(item)
+plan(multisession, workers = 4)
 
-  # Add user or group names based on principal_type
-  perms |>
-    dplyr::left_join(
-      user_lookup,
-      by = c("principal_guid" = "guid")
-    ) |>
-    dplyr::left_join(
-      group_lookup,
-      by = c("principal_guid" = "guid")
-    ) |>
-    dplyr::mutate(
-      principal_name = dplyr::case_when(
-        principal_type == "user" ~ username,
-        principal_type == "group" ~ groupname,
-        TRUE ~ NA_character_
-      )
-    ) |>
-    dplyr::select(-username, -groupname)
-}) |>
+# get all current permissions of the content pieces
+message("Getting permissions for all content items")
+all_perms <- future_map(
+  my_content_guids,
+  \(content_guid) {
+    item <- content_item(connect, content_guid)
+    perms <- get_content_permissions(item)
+
+    # Add user or group names based on principal_type
+    perms |>
+      dplyr::left_join(
+        user_lookup,
+        by = c("principal_guid" = "guid")
+      ) |>
+      dplyr::left_join(
+        group_lookup,
+        by = c("principal_guid" = "guid")
+      ) |>
+      dplyr::mutate(
+        principal_name = dplyr::case_when(
+          principal_type == "user" ~ username,
+          principal_type == "group" ~ groupname,
+          TRUE ~ NA_character_
+        )
+      ) |>
+      dplyr::select(-username, -groupname)
+  },
+  .progress = TRUE,
+  .options = furrr_options(seed = NULL)
+) |>
   dplyr::bind_rows()
 
 # save data in csv file so that target ownership can be added
@@ -111,22 +127,33 @@ write.csv(all_perms, file = file.path(data_dir, "relevant_content_perms.csv"))
 
 # Get environment variable names for each content item
 message("Getting environment variables for all content items")
-all_env_vars <- purrr::map(my_content_guids, \(content_guid) {
-  item <- content_item(connect, content_guid)
-  env <- get_environment(item)
-  env_names <- unlist(env$env_vars)
-  if (length(env_names) == 0) {
-    return(tibble::tibble(
-      content_guid = character(),
-      env_var_name = character()
-    ))
-  }
-  tibble::tibble(
-    content_guid = content_guid,
-    env_var_name = as.character(env_names)
-  )
-}) |>
-  dplyr::bind_rows()
+all_env_vars <- future_map(
+  my_content_guids,
+  \(content_guid) {
+    item <- content_item(connect, content_guid)
+    env <- get_environment(item)
+    env_names <- unlist(env$env_vars)
+    if (length(env_names) == 0) {
+      return(tibble::tibble(
+        content_guid = character(),
+        env_var_name = character()
+      ))
+    }
+    tibble::tibble(
+      content_guid = content_guid,
+      env_var_name = as.character(env_names)
+    )
+  },
+  .progress = TRUE,
+  .options = furrr_options(seed = NULL)
+) |>
+  dplyr::bind_rows() |>
+  dplyr::left_join(
+    my_selected_content |> dplyr::select(guid, name),
+    by = c("content_guid" = "guid")
+  ) |>
+  dplyr::select(content_guid, name, env_var_name) |>
+  dplyr::mutate(env_var_value = "changeme")
 
 write.csv(
   all_env_vars,
@@ -139,6 +166,66 @@ message(
   " environment variables to content_env_vars.csv"
 )
 
+# Download all users with their names
+message("Getting all users from server")
+all_users <- get_users(connect) |>
+  dplyr::select(username, first_name, last_name, email)
+
+write.csv(
+  all_users,
+  file = file.path(data_dir, "users.csv"),
+  row.names = FALSE
+)
+message("Saved ", nrow(all_users), " users to users.csv")
+
+# Download all groups and their members
+message("Getting all groups and their members")
+all_groups <- get_groups(connect)
+
+write.csv(
+  all_groups,
+  file = file.path(data_dir, "groups.csv"),
+  row.names = FALSE
+)
+message("Saved ", nrow(all_groups), " groups to groups.csv")
+
+all_group_members <- future_map(
+  all_groups$guid,
+  \(group_guid) {
+    members <- get_group_members(connect, guid = group_guid)
+    if (nrow(members) == 0) {
+      return(tibble::tibble(
+        group_guid = character(),
+        group_name = character(),
+        username = character()
+      ))
+    }
+    group_name <- all_groups |>
+      dplyr::filter(guid == group_guid) |>
+      dplyr::pull(name)
+    members |>
+      dplyr::select(username) |>
+      dplyr::mutate(
+        group_guid = group_guid,
+        group_name = group_name
+      )
+  },
+  .progress = TRUE,
+  .options = furrr_options(seed = NULL)
+) |>
+  dplyr::bind_rows()
+
+write.csv(
+  all_group_members,
+  file = file.path(data_dir, "group_members.csv"),
+  row.names = FALSE
+)
+message(
+  "Saved ",
+  nrow(all_group_members),
+  " group memberships to group_members.csv"
+)
+
 message("Getting a list of all used R packages")
 packs <- get_packages(connect) |>
   dplyr::filter(language == "r") |>
@@ -146,14 +233,9 @@ packs <- get_packages(connect) |>
   unique()
 write.csv(packs, file = file.path(data_dir, "packages.csv"))
 
-plan(multisession, workers = 4)
+plan(sequential)
 
-if (is_fda_testing) {
-  my_content_guids <- c(
-    "ceb8c9c6-0bbf-4c3b-b968-9baa1b9c023a",
-    "dbf14418-b901-4d9f-b396-5bc82ec21075"
-  )
-}
+plan(multisession, workers = 4)
 
 future_walk(
   my_content_guids,

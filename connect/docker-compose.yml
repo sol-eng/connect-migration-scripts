@@ -2,10 +2,12 @@ version: "2.2"
 
 services:
   connect:
-    image: fda:latest
+    image: fda:2024.11.0
     build:
       context: .
       dockerfile: Dockerfile
+      args: 
+        PSC_VERSION: "2024.11.0"
     command: ["/usr/local/bin/psc-start.sh"]
     container_name: connect
     hostname: connect
@@ -18,10 +20,12 @@ services:
       RSC_LICENSE: ${RSC_LICENSE}
 
   connect_new:
-    image: fda:latest
+    image: fda:2026.01.1
     build:
       context: .
       dockerfile: Dockerfile
+      args: 
+        PSC_VERSION: "2026.01.1"
     command: ["/usr/local/bin/psc-start.sh"]
     container_name: connect_new
     hostname: connect_new
