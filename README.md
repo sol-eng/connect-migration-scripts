@@ -1,14 +1,16 @@
+# connect-migration-scripts
+
 This repository is a work in progress to help migration of content from a Posit Connect Server to another.
 
 Main use case here is where content from one server is merged into an existing server that prevents an official migration. The approach here also can be used to selectively migrate pieces of content. 
 
 The repository has two main folders 
 
-#connect
+## connect
 
 This contains a docker-compose enviroment that spins up two Posit connect servers where one is populated with some test users and deployments, the other remains empty. There also is a package manager container for conveniency reasons. 
-
-#migrate
+ 
+## migrate
 
 Here there is the R scripts that use the Connect API for the migration work: 
 
