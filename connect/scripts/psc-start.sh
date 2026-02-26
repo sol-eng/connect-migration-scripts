@@ -84,6 +84,74 @@ if [ ! -f /var/lib/rstudio-connect/connect-bootstrap.key ]; then
 
     done
 
+    # Create groups
+    GROUP1_DATA='{"name": "group1", "description": "Group 1"}'
+    curl --silent --show-error -L --max-redirs 0 --fail \
+        -X POST \
+        -H "Authorization: Key ${API_KEY}" \
+        --data-raw "${GROUP1_DATA}" \
+        "${CONNECT_URL}/__api__/v1/groups" > /tmp/group1.log
+
+    GROUP2_DATA='{"name": "group2", "description": "Group 2"}'
+    curl --silent --show-error -L --max-redirs 0 --fail \
+        -X POST \
+        -H "Authorization: Key ${API_KEY}" \
+        --data-raw "${GROUP2_DATA}" \
+        "${CONNECT_URL}/__api__/v1/groups" > /tmp/group2.log
+
+    # Add adminuser to group1
+    GROUP1_GUID=$(curl --silent --show-error -L --max-redirs 0 --fail \
+        -H "Authorization: Key ${API_KEY}" \
+        "${CONNECT_URL}/__api__/v1/groups?prefix=group1" | \
+        python3 -c "import sys, json; data=json.load(sys.stdin); print(data['results'][0]['guid'] if data['results'] else '')")
+    
+    ADMINUSER_GUID=$(curl --silent --show-error -L --max-redirs 0 --fail \
+        -H "Authorization: Key ${API_KEY}" \
+        "${CONNECT_URL}/__api__/v1/users?prefix=adminuser" | \
+        python3 -c "import sys, json; data=json.load(sys.stdin); print(data['results'][0]['guid'] if data['results'] else '')")
+    
+    if [[ -n "$GROUP1_GUID" && -n "$ADMINUSER_GUID" ]]; then
+        echo "Adding adminuser ($ADMINUSER_GUID) to group1 ($GROUP1_GUID)"
+        curl --silent --show-error -L --max-redirs 0 --fail \
+            -X POST \
+            -H "Authorization: Key ${API_KEY}" \
+            -H "Content-Type: application/json" \
+            --data-raw "{\"user_guid\": \"${ADMINUSER_GUID}\"}" \
+            "${CONNECT_URL}/__api__/v1/groups/${GROUP1_GUID}/members" > /tmp/add_adminuser_to_group1.log
+        echo "Added adminuser to group1"
+    else
+        echo "Error: Could not find group1 or adminuser GUIDs"
+        echo "GROUP1_GUID: $GROUP1_GUID"
+        echo "ADMINUSER_GUID: $ADMINUSER_GUID"
+    fi
+
+    # Add user3 to group2
+    GROUP2_GUID=$(curl --silent --show-error -L --max-redirs 0 --fail \
+        -H "Authorization: Key ${API_KEY}" \
+        "${CONNECT_URL}/__api__/v1/groups?prefix=group2" | \
+        python3 -c "import sys, json; data=json.load(sys.stdin); print(data['results'][0]['guid'] if data['results'] else '')")
+    
+    USER3_GUID=$(curl --silent --show-error -L --max-redirs 0 --fail \
+        -H "Authorization: Key ${API_KEY}" \
+        "${CONNECT_URL}/__api__/v1/users?prefix=user3" | \
+        python3 -c "import sys, json; data=json.load(sys.stdin); print(data['results'][0]['guid'] if data['results'] else '')")
+    
+    if [[ -n "$GROUP2_GUID" && -n "$USER3_GUID" ]]; then
+        echo "Adding user3 ($USER3_GUID) to group2 ($GROUP2_GUID)"
+        curl --silent --show-error -L --max-redirs 0 --fail \
+            -X POST \
+            -H "Authorization: Key ${API_KEY}" \
+            -H "Content-Type: application/json" \
+            --data-raw "{\"user_guid\": \"${USER3_GUID}\"}" \
+            "${CONNECT_URL}/__api__/v1/groups/${GROUP2_GUID}/members" > /tmp/add_user3_to_group2.log
+        echo "Added user3 to group2"
+    else
+        echo "Error: Could not find group2 or user3 GUIDs"
+        echo "GROUP2_GUID: $GROUP2_GUID" 
+        echo "USER3_GUID: $USER3_GUID"
+    fi
+
+
     if [[ `hostname` == "connect" ]]; then 
     # Set up adminuser with deployment capabilities
 
@@ -93,7 +161,8 @@ if [ ! -f /var/lib/rstudio-connect/connect-bootstrap.key ]; then
     R_VERSION=4.3.3
     cd /tmp && git clone https://github.com/sol-eng/r-examples.git 
     mkdir -p ~/R/x86_64-pc-linux-gnu-library/4.3
-    /opt/R/\${R_VERSION}/bin/R -q -e 'pak::pak(c("rmarkdown","rsconnect","dplyr","connectapi"))' >& ~/pak.log 
+    /opt/R/\${R_VERSION}/bin/R -q -e 'install.packages("pak")'
+    /opt/R/\${R_VERSION}/bin/R -q -e 'pak::pak(c("rmarkdown","rsconnect","dplyr","connectapi"))' 
     /opt/R/\${R_VERSION}/bin/R -q -e 'rsconnect::addServer("http://connect:3939",name="my-psc")'
     /opt/R/\${R_VERSION}/bin/R -q -e "rsconnect::connectApiUser(account='adminuser', server='my-psc', apiKey='${API_KEY}')"
 
@@ -117,8 +186,15 @@ if [ ! -f /var/lib/rstudio-connect/connect-bootstrap.key ]; then
         content_add_user(app_item, user2\$guid[1], role = "owner")
         user3 <- get_users(client, prefix = "user3")
         content_add_user(app_item, user3\$guid[1], role = "viewer")
+        group1 <- get_groups(client, prefix = "group1")
+        content_add_group(app_item, group1\$guid, role="viewer")
         # Transfer ownership to user2
         app_item <- content_update(app_item, owner_guid = user2\$guid[1])
+        set_environment_all(
+            app_item,
+            TEST_ENV_1 = "VALUE_1",
+            TEST_ENV_2 = "VALUE_2"
+        )
 
         set_vanity_url(app_item, "my-shiny")
 
@@ -138,9 +214,20 @@ if [ ! -f /var/lib/rstudio-connect/connect-bootstrap.key ]; then
         content_add_user(app_item, user1\$guid[1], role = "owner")
         user3 <- get_users(client, prefix = "user3")
         content_add_user(app_item, user3\$guid[1], role = "viewer")
+        group2 <- get_groups(client, prefix = "group2")
+        content_add_group(app_item, group2\$guid, role="viewer")
+        group1 <- get_groups(client, prefix = "group1")
+        content_add_group(app_item, group1\$guid, role="owner")
         # Transfer ownership to user1
         app_item <- content_update(app_item, owner_guid = user1\$guid[1])
 
+        set_environment_all(
+            app_item,
+            REPORT_ENV_1 = "VALUE_1",
+            REPORT_ENV_2 = "VALUE_2",
+            REPORT_ENV_3 = "VALUE_3",
+            REPORT_ENV_4 = "VALUE_4"
+        )
         set_vanity_url(app_item, "rmd-doc")
 
         # Remove adminuser from the content

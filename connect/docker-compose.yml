@@ -33,6 +33,27 @@ services:
     environment:
       RSC_LICENSE: ${RSC_LICENSE}
 
+  packagemanager:
+    image: rstudio-pm:${PPM_VERSION:-2025.12.0-14}-R-${R_VERSION:-4.5.2}-py-${PYTHON_VERSION:-3.11.6}
+    build:
+      context: .
+      dockerfile: Dockerfile.ppm
+      args:
+        PPM_VERSION: ${PPM_VERSION:-2025.04.4-13}
+        R_VERSION: ${R_VERSION:-4.5.2}
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.11.6}
+    command: ["/ppm-start.sh"]
+    container_name: packagemanager
+    hostname: packagemanager
+    privileged: false
+    volumes:
+      - var_lib_rspm:/var/lib/rstudio-pm
+    ports:
+      - "4242:4242"
+    environment:
+      RSPM_LICENSE: ${RSPM_LICENSE}
+
 volumes:
   var_lib_connect_new:
   var_lib_connect:
+  var_lib_rspm:

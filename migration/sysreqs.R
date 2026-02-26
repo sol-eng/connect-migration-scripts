@@ -21,3 +21,16 @@ if (length(sysreqs$install_scripts) > 0) {
 if (length(sysreqs$post_install) > 0) {
   cat(sysreqs$post_install, fill = TRUE)
 }
+
+if (
+  length(sysreqs$pre_install) +
+    length(sysreqs$install_scripts) +
+    length(sysreqs$post_install) >
+    0
+) {
+  cat
+  "Please make sure the above system requirements are installed before proceeding"
+  break
+}
+
+cat("✓ All system requirements are met.\n\n")

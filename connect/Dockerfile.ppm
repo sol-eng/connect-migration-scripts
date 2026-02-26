@@ -1,0 +1,44 @@
+FROM ubuntu:jammy
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# install basic prereqs
+RUN apt-get update && \
+    apt install -y gdebi-core curl
+
+# install R for ability to build custom R packages 
+ARG R_VERSION
+RUN curl -O https://cdn.rstudio.com/r/ubuntu-2204/pkgs/r-${R_VERSION}_1_amd64.deb &&  \
+    gdebi -n r-${R_VERSION}_1_amd64.deb && \
+    rm -f r-${R_VERSION}_1_amd64.deb 
+
+
+# install Python (and deps) for the ability to build custom Python packages 
+ARG PYTHON_VERSION
+RUN curl -O https://cdn.rstudio.com/python/ubuntu-2204/pkgs/python-${PYTHON_VERSION}_1_amd64.deb && \
+    gdebi -n python-${PYTHON_VERSION}_1_amd64.deb && \
+    /opt/python/${PYTHON_VERSION}/bin/pip install virtualenv build && \
+    rm -f python-${PYTHON_VERSION}_1_amd64.deb
+
+# install Package Manager
+ARG PPM_VERSION
+RUN curl -fO https://cdn.posit.co/package-manager/deb/amd64/rstudio-pm_${PPM_VERSION}_amd64.deb && \
+    gdebi -n rstudio-pm_${PPM_VERSION}_amd64.deb && \
+    rm -f rstudio-pm_${PPM_VERSION}_amd64.deb
+
+
+
+# install sudo to allow starting of package manager under service account
+RUN apt-get install sudo
+
+COPY scripts/ppm-setup.sh /
+COPY scripts/ppm-start.sh /
+COPY config/rstudio-pm.gcfg /etc/rstudio-pm
+
+RUN sed -i "s/PYTHON_VERSION/${PYTHON_VERSION}/" /etc/rstudio-pm/rstudio-pm.gcfg
+RUN sed -i "s/R_VERSION/${R_VERSION}/" /etc/rstudio-pm/rstudio-pm.gcfg
+
+ENTRYPOINT ["/ppm-start.sh"]
+
+
+

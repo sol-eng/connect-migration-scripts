@@ -56,8 +56,14 @@ Enabled = true
 Executable = /opt/python/3.12.6/bin/python3
 Executable = /opt/python/3.9.18/bin/python3
 
-[R]
-PositPackageManagerURLRewriting = force-binary
+;[R]
+;PositPackageManagerURLRewriting = force-binary
+
+[RPackageRepository "CRAN"]
+URL = http://packagemanager:4242/cran/__linux__/rhel9/latest
+
+[RPackageRepository "RSPM"]
+URL = http://packagemanager:4242/cran/__linux__/rhel9/latest
 
 
 [Bootstrap]

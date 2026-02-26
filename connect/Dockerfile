@@ -17,9 +17,7 @@ ENV PYTHON_VERSION=3.9.18
 RUN dnf install -y https://cdn.rstudio.com/python/rhel-9/pkgs/python-${PYTHON_VERSION}-1-1.x86_64.rpm
 
 
-RUN echo 'options(repos="https://p3m.dev/cran/__linux__/rhel9/latest")' > /opt/R/${R_VERSION}/lib/R/etc/Rprofile.site && \
-    /opt/R/${R_VERSION}/bin/R -q -e 'install.packages("pak")' && \
-    /opt/R/${R_VERSION}/bin/R -q -e 'system(pak::pkg_sysreqs(c("shiny","tidyverse"))$install_scripts)'
+RUN echo 'options(repos="http://packagemanager:4242/cran/__linux__/rhel9/latest")' > /opt/R/${R_VERSION}/lib/R/etc/Rprofile.site 
 
 RUN useradd -m adminuser && \
     useradd -m user1 && \

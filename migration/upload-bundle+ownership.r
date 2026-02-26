@@ -3,20 +3,107 @@ library(furrr)
 
 connect_new <- connect(
   server = "http://localhost:3940",
-  api_key = "up9mfb2b23NYWpcy14SPKy3t0MlABkcS"
+  api_key = "JZyebHQTdUiItSjKpRoDfJd5WpNGgys7"
 )
 
 admin_user <- "adminuser"
 data_dir <- "/tmp/data"
 
+# Load permissions data for validation
+content_perms <- read.csv(file.path(data_dir, "relevant_content_perms.csv"))
+
+# Check if all required users and groups exist on target server
+cat("Validating users and groups on target server...\n")
+
+# Get all users and groups from target server
+target_users <- get_users(connect_new)
+target_groups <- get_groups(connect_new)
+
+# Get unique principals from permissions data (excluding admin user)
+required_principals <- content_perms |>
+  dplyr::filter(principal_name != admin_user) |>
+  dplyr::select(principal_name, principal_type) |>
+  dplyr::distinct()
+
+missing_principals <- c()
+
+for (i in seq_len(nrow(required_principals))) {
+  principal <- required_principals[i, ]
+
+  if (principal$principal_type == "user") {
+    if (!any(target_users$username == principal$principal_name)) {
+      missing_principals <- c(
+        missing_principals,
+        paste0("USER: ", principal$principal_name)
+      )
+    }
+  } else if (principal$principal_type == "group") {
+    if (!any(target_groups$name == principal$principal_name)) {
+      missing_principals <- c(
+        missing_principals,
+        paste0("GROUP: ", principal$principal_name)
+      )
+    }
+  }
+}
+
+if (length(missing_principals) > 0) {
+  cat("ERROR: The following users/groups are missing on target server:\n")
+  for (missing in missing_principals) {
+    cat("  -", missing, "\n")
+  }
+  cat("\nPlease create these users/groups before running the migration.\n")
+  stop("Migration aborted due to missing users/groups")
+}
+
+cat("✓ All required users and groups exist on target server\n\n")
+
+
 bundle_files <- list.files(
   path = data_dir,
   pattern = "^bundle.*\\.tar\\.gz$",
   full.names = TRUE
-)
+) |>
+  # Sort files properly by extracting and ordering the numeric suffix
+  {
+    \(files) {
+      # Create a data frame with file paths and extracted bundle numbers
+      bundle_data <- tibble::tibble(file = files) |>
+        dplyr::mutate(
+          # Extract the bundle number (last number before .tar.gz)
+          bundle_num = as.numeric(stringr::str_extract(
+            basename(file),
+            "-(\\d+)\\.tar\\.gz$",
+            group = 1
+          ))
+        ) |>
+        dplyr::arrange(bundle_num)
+
+      bundle_data$file
+    }
+  }()
 
 relevant_content <- read.csv(file.path(data_dir, "relevant_content.csv"))
-content_perms <- read.csv(file.path(data_dir, "relevant_content_perms.csv"))
+# content_perms already loaded above for validation
+
+# Load environment variables
+env_vars_file <- file.path(data_dir, "content_env_vars.csv")
+if (file.exists(env_vars_file)) {
+  content_env_vars <- read.csv(env_vars_file)
+  cat("Loaded", nrow(content_env_vars), "environment variable entries\n")
+} else {
+  content_env_vars <- tibble::tibble(
+    content_guid = character(),
+    env_var_name = character()
+  )
+  cat("No environment variables file found, skipping env vars\n")
+}
+
+# Define environment variable values here
+# The Connect API only stores names, so you must provide values manually
+# All environment variables will be set to "changeme" on the target server
+# Update them with the correct values after migration
+env_var_default_value <- "changeme"
 
 # Group bundle files by GUID
 bundle_df <- tibble::tibble(file = bundle_files) |>
@@ -33,7 +120,9 @@ deploy_guid <- function(
   metadata,
   content_perms,
   connect_new,
-  admin_user
+  admin_user,
+  content_env_vars,
+  env_var_default_value
 ) {
   has_multiple <- nrow(guid_bundles) > 1
 
@@ -43,6 +132,7 @@ deploy_guid <- function(
   }
 
   new_bundle_id <- NULL
+  first_bundle_deployed <- FALSE
 
   for (bundle_file in guid_bundles$file) {
     cat("  Deploying bundle:", basename(bundle_file), "\n")
@@ -59,20 +149,34 @@ deploy_guid <- function(
           title = as.character(metadata$title),
           name = as.character(metadata$name)
         )
-        cat("  Successfully deployed:", new_bundle_id$content$guid, "\n")
+        cat(
+          "  Successfully started deployment:",
+          new_bundle_id$content$guid,
+          "\n"
+        )
 
-        # Only poll if multiple bundles for this GUID
-        if (has_multiple) {
+        # Poll after first bundle deployment OR if multiple bundles for this GUID
+        if (!first_bundle_deployed || has_multiple) {
+          cat("  Waiting for deployment to complete...\n")
           poll_task(new_bundle_id, wait = 2, callback = NULL)
           cat("  Deployment complete, proceeding to next bundle.\n")
+          first_bundle_deployed <- TRUE
         }
       },
       error = function(e) {
         cat("  Error deploying bundle:", e$message, "\n")
       },
       finally = {
-        if (!is.null(bundle) && inherits(bundle, "connection")) {
-          tryCatch(close(bundle), error = function(e) NULL)
+        # Close only file connections opened by bundle_path/deploy
+        open_cons <- showConnections(all = FALSE)
+        if (nrow(open_cons) > 0) {
+          file_cons <- which(
+            open_cons[, "class"] == "file" &
+              grepl("\\.tar\\.gz$", open_cons[, "description"])
+          )
+          for (con_idx in as.integer(rownames(open_cons)[file_cons])) {
+            tryCatch(close(getConnection(con_idx)), error = function(e) NULL)
+          }
         }
         gc()
       }
@@ -103,25 +207,46 @@ deploy_guid <- function(
 
   # Apply permissions from the old server
   old_guid_perms <- content_perms |>
-    dplyr::filter(content_guid == guid, username != admin_user)
+    dplyr::filter(content_guid == guid, principal_name != admin_user)
 
   for (i in seq_len(nrow(old_guid_perms))) {
     perm <- old_guid_perms[i, ]
     tryCatch(
       {
-        target_guid <- user_guid_from_username(connect_new, perm$username)
-        if (!is.na(target_guid)) {
-          content_add_user(new_content, target_guid, role = perm$role)
-          cat("  Added", perm$username, "as", perm$role, "\n")
-        } else {
-          cat("  User not found on target server:", perm$username, "\n")
+        if (perm$principal_type == "user") {
+          target_guid <- user_guid_from_username(
+            connect_new,
+            perm$principal_name
+          )
+          if (!is.na(target_guid)) {
+            content_add_user(new_content, target_guid, role = perm$role)
+            cat("  Added user", perm$principal_name, "as", perm$role, "\n")
+          } else {
+            cat("  User not found on target server:", perm$principal_name, "\n")
+          }
+        } else if (perm$principal_type == "group") {
+          # Find group by name
+          target_groups <- get_groups(connect_new, prefix = perm$principal_name)
+          if (nrow(target_groups) > 0) {
+            target_guid <- target_groups$guid[1]
+            content_add_group(new_content, target_guid, role = perm$role)
+            cat("  Added group", perm$principal_name, "as", perm$role, "\n")
+          } else {
+            cat(
+              "  Group not found on target server:",
+              perm$principal_name,
+              "\n"
+            )
+          }
         }
       },
       error = function(e) {
         cat(
           "  Error adding permission for",
-          perm$username,
-          ":",
+          perm$principal_name,
+          "(",
+          perm$principal_type,
+          "):",
           e$message,
           "\n"
         )
@@ -131,16 +256,35 @@ deploy_guid <- function(
 
   # Transfer ownership
   owner_row <- content_perms |>
-    dplyr::filter(content_guid == guid, role == "owner", username != admin_user)
+    dplyr::filter(
+      content_guid == guid,
+      role == "owner",
+      principal_name != admin_user
+    )
 
   if (nrow(owner_row) >= 1) {
-    owner_username <- owner_row$username[1]
+    owner_principal <- owner_row[1, ]
     tryCatch(
       {
-        new_owner_guid <- user_guid_from_username(connect_new, owner_username)
-        if (!is.na(new_owner_guid)) {
-          content_update_owner(new_content, new_owner_guid)
-          cat("  Ownership transferred to", owner_username, "\n")
+        if (owner_principal$principal_type == "user") {
+          new_owner_guid <- user_guid_from_username(
+            connect_new,
+            owner_principal$principal_name
+          )
+          if (!is.na(new_owner_guid)) {
+            content_update_owner(new_content, new_owner_guid)
+            cat(
+              "  Ownership transferred to user",
+              owner_principal$principal_name,
+              "\n"
+            )
+          }
+        } else {
+          cat(
+            "  WARNING: Cannot transfer ownership to group",
+            owner_principal$principal_name,
+            "\n"
+          )
         }
       },
       error = function(e) {
@@ -167,6 +311,33 @@ deploy_guid <- function(
     }
   )
 
+  # Apply environment variables
+  guid_env_vars <- content_env_vars |>
+    dplyr::filter(content_guid == guid)
+
+  if (nrow(guid_env_vars) > 0) {
+    env_args <- list()
+    for (j in seq_len(nrow(guid_env_vars))) {
+      var_name <- guid_env_vars$env_var_name[j]
+      env_args[[var_name]] <- env_var_default_value
+    }
+    if (length(env_args) > 0) {
+      tryCatch(
+        {
+          do.call(set_environment_all, c(list(new_content), env_args))
+          cat(
+            "  Set environment variables:",
+            paste(names(env_args), collapse = ", "),
+            "\n"
+          )
+        },
+        error = function(e) {
+          cat("  Error setting environment variables:", e$message, "\n")
+        }
+      )
+    }
+  }
+
   cat("\n")
   invisible(new_bundle_id)
 }
@@ -175,23 +346,74 @@ deploy_guid <- function(
 # Multi-bundle GUIDs self-manage sequencing via poll_task
 guids <- unique(bundle_df$guid)
 
-for (guid in guids) {
-  cat("Processing GUID:", guid, "\n")
+# Deploy first GUID sequentially to avoid packrat locking issues
+first_guid <- guids[1]
+cat("Processing first GUID sequentially:", first_guid, "\n")
 
-  if (!any(relevant_content$guid == guid)) {
-    cat("Warning: No metadata found for GUID:", guid, "\n\n")
-    next
-  }
-
-  metadata <- relevant_content[relevant_content$guid == guid, ]
-  guid_bundles <- bundle_df |> dplyr::filter(guid == !!guid)
+if (!any(relevant_content$guid == first_guid)) {
+  cat("Warning: No metadata found for GUID:", first_guid, "\n\n")
+} else {
+  metadata <- relevant_content[relevant_content$guid == first_guid, ]
+  guid_bundles <- bundle_df |> dplyr::filter(guid == !!first_guid)
 
   deploy_guid(
-    guid,
+    first_guid,
     guid_bundles,
     metadata,
     content_perms,
     connect_new,
-    admin_user
+    admin_user,
+    content_env_vars,
+    env_var_default_value
   )
+}
+
+# Deploy remaining GUIDs in parallel
+remaining_guids <- guids[-1]
+
+if (length(remaining_guids) > 0) {
+  cat("Processing remaining", length(remaining_guids), "GUIDs in parallel\n")
+
+  # Pass connection details instead of the R6 object
+  # so each worker can create its own connection (needed for multisession/Windows)
+  connect_server <- connect_new$server
+  connect_api_key <- connect_new$api_key
+
+  plan(multisession, workers = 3)
+
+  future_walk(
+    remaining_guids,
+    \(guid) {
+      # Create a fresh connection in each worker
+      worker_connect <- connectapi::connect(
+        server = connect_server,
+        api_key = connect_api_key
+      )
+
+      cat("Processing GUID:", guid, "\n")
+
+      if (!any(relevant_content$guid == guid)) {
+        cat("Warning: No metadata found for GUID:", guid, "\n\n")
+        return(invisible(NULL))
+      }
+
+      metadata <- relevant_content[relevant_content$guid == guid, ]
+      guid_bundles <- bundle_df |> dplyr::filter(guid == !!guid)
+
+      deploy_guid(
+        guid,
+        guid_bundles,
+        metadata,
+        content_perms,
+        worker_connect,
+        admin_user,
+        content_env_vars,
+        env_var_default_value
+      )
+    },
+    .progress = TRUE,
+    .options = furrr_options(seed = NULL)
+  )
+
+  plan(sequential)
 }
