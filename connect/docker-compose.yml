@@ -1,0 +1,38 @@
+version: "2.2"
+
+services:
+  connect:
+    image: fda:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/usr/local/bin/psc-start.sh"]
+    container_name: connect
+    hostname: connect
+    privileged: true
+    volumes:
+      - var_lib_connect:/var/lib/rstudio-connect
+    ports:
+      - "3939:3939"
+    environment:
+      RSC_LICENSE: ${RSC_LICENSE}
+
+  connect_new:
+    image: fda:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/usr/local/bin/psc-start.sh"]
+    container_name: connect_new
+    hostname: connect_new
+    privileged: true
+    volumes:
+      - var_lib_connect_new:/var/lib/rstudio-connect
+    ports:
+      - "3940:3939"
+    environment:
+      RSC_LICENSE: ${RSC_LICENSE}
+
+volumes:
+  var_lib_connect_new:
+  var_lib_connect:
