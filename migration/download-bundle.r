@@ -19,7 +19,7 @@ is_hide_version <- TRUE
 # If is_fda_testing is set to
 #   TRUE: only download the bundles of the m5-perf and the penguins app
 #   FALSE: download everything
-is_fda_testing <- FALSE
+is_user_testing <- FALSE
 
 # Only download max_bundles_per_guid
 max_bundles_per_guid <- 10
@@ -33,7 +33,7 @@ my_guid <- get_users(connect, prefix = admin_user)$guid
 my_content <- get_content(connect)
 my_content_guids <- my_content$guid
 
-if (is_fda_testing) {
+if (is_user_testing) {
   my_content_guids <- c(
     "ceb8c9c6-0bbf-4c3b-b968-9baa1b9c023a",
     "dbf14418-b901-4d9f-b396-5bc82ec21075"
