@@ -3,7 +3,7 @@ library(furrr)
 
 connect_new <- connect(
   server = "http://localhost:3940",
-  api_key = "DO8QaoKqDHkK6IhXir8tJnhECjAXj4QQ"
+  api_key = "Ax651r8Kudm9Kbm5ICZ44aZtDZdStfHE"
 )
 
 admin_user <- "adminuser"
@@ -271,8 +271,12 @@ deploy_guid <- function(
     guid_bundles <- guid_bundles |> dplyr::arrange(dplyr::desc(file))
   }
 
-  new_bundle_id <- NULL
+  current_bundle_guid <- NULL
   first_bundle_deployed <- FALSE
+
+  # Use temporary unique name during deployment to avoid conflicts
+  temp_name <- paste0(as.character(metadata$name), "-", guid)
+  original_name <- as.character(metadata$name)
 
   for (bundle_file in guid_bundles$file) {
     cat("  Deploying bundle:", basename(bundle_file), "\n")
@@ -280,15 +284,16 @@ deploy_guid <- function(
     tryCatch(
       {
         bundle <- bundle_path(bundle_file)
-        cat("  Metadata - Name:", as.character(metadata$name), "\n")
+        cat("  Metadata - Name:", original_name, "\n")
         cat("  Metadata - Title:", as.character(metadata$title), "\n")
 
         new_bundle_id <- deploy(
           connect_new,
           bundle,
           title = as.character(metadata$title),
-          name = as.character(metadata$name)
+          name = temp_name
         )
+
         cat(
           "  Successfully started deployment:",
           new_bundle_id$content$guid,
@@ -438,6 +443,17 @@ deploy_guid <- function(
       "- adminuser will remain as owner\n"
     )
   }
+
+  # Restore original name after ownership transfer
+  tryCatch(
+    {
+      new_content$update(name = original_name)
+      cat("  Restored original name:", original_name, "\n")
+    },
+    error = function(e) {
+      cat("  Error restoring original name:", e$message, "\n")
+    }
+  )
 
   # Remove admin user
   tryCatch(
