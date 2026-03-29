@@ -3,7 +3,7 @@ library(furrr)
 
 connect_new <- connect(
   server = "http://localhost:3940",
-  api_key = "Ax651r8Kudm9Kbm5ICZ44aZtDZdStfHE"
+  api_key = "vi4CtqOS9sRBi34KSLB94EAXYLrObVJ2"
 )
 
 admin_user <- "adminuser"
@@ -189,18 +189,37 @@ if (length(missing_principals) > 0) {
 
 cat("✓ All required users and groups exist on target server\n\n")
 
-# Create "migrated" tag on target server
-cat("Creating 'migrated' tag on target server...\n")
-migrated_tag <- tryCatch(
-  {
-    create_tag(connect_new, "migrated")
-  },
-  error = function(e) {
-    # Tag may already exist, try to find it
-    tags <- get_tags(connect_new)
-    tags$migrated
-  }
-)
+# Get the "migrated" tag
+tags <- get_tags(connect_new)
+
+# create tag category only if it doesn't already exist
+if (is.null(tags$`Migration Status`)) {
+  tryCatch(
+    create_tag(connect_new, "Migration Status"),
+    error = function(e) {
+      cat("Error creating 'Migration Status' tag:", e$message, "\n")
+    }
+  )
+}
+cat("✓ 'Migration Status' tag category ready\n\n")
+
+
+tags <- get_tags(connect_new)
+
+# create actual tag only if it doesn't already exist
+migrated_tag <- tags$`Migration Status`$migrated
+if (is.null(migrated_tag)) {
+  tryCatch(
+    {
+      migrated_tag <- create_tag(
+        connect_new,
+        "migrated",
+        parent = tags$`Migration Status`
+      )
+    },
+    error = function(e) cat("Error creating 'migrated' tag:", e$message, "\n")
+  )
+}
 cat("✓ 'migrated' tag ready\n\n")
 
 bundle_files <- list.files(
